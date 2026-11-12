@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tremor Map: live earthquakes worldwide</title>
+<meta name="description" content="A live earthquake map with a seismogram timeline, a replay with ripples, and sound.">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<style>
+:root{--ink:#111;--muted:#555;--rule:#c4c4c4;--ocean:#e6edf2;--focus:#1a56c4}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:#fff;color:var(--ink);font:17px/1.4 "Times New Roman",Times,serif;font-variant-numeric:tabular-nums}
+#map{position:absolute;top:0;bottom:0;left:370px;right:0;background:var(--ocean)}
+.leaflet-container{font-family:inherit}
+.panel{position:absolute;top:0;bottom:0;left:0;width:370px;overflow:auto;background:#fff;border-right:1px solid var(--ink);padding:22px 24px}
+h1{margin:0;font-size:1.9rem;line-height:1.15;font-weight:700}
+.sub{margin:6px 0 18px;color:var(--muted);font-style:italic}
+.group{margin:0 0 18px}
+.label{display:block;margin-bottom:6px;padding-bottom:2px;border-bottom:1px solid var(--rule);font-variant:small-caps;letter-spacing:.05em;color:var(--muted)}
+.row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+button,select{font:inherit;color:var(--ink);background:#fff;border:1px solid var(--ink);border-radius:0;padding:2px 10px;cursor:pointer}
+button:hover{background:#ececec}
+button[aria-pressed="true"]{background:var(--ink);color:#fff}
+button:focus-visible,input:focus-visible,select:focus-visible,canvas:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+input[type=range]{width:100%;accent-color:#111}
+.note{margin:4px 0 0;font-size:.9rem;color:var(--muted)}
+canvas{display:block;width:100%;height:64px;background:#fff;border:1px solid var(--ink);cursor:ew-resize;touch-action:none}
+.ends{display:flex;justify-content:space-between;margin-top:3px;font-size:.85rem;color:var(--muted)}
+.stats{display:grid;grid-template-columns:auto 1fr;gap:0 16px;align-items:baseline;margin:0 0 18px;padding:10px 0;border-block:1px solid var(--ink)}
+.stats strong{font-size:1.9rem;line-height:1.25}
+.muted{color:var(--muted)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 18px;font-size:.92rem;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.dot{display:inline-block;width:11px;height:11px;border-radius:50%;border:1px solid #4a1a10}
+ul{list-style:none;margin:0;padding:0}
+li button{display:grid;grid-template-columns:50px 1fr auto;gap:8px;align-items:baseline;width:100%;text-align:left;border:0;border-bottom:1px solid var(--rule);padding:6px 2px}
+li .m{font-weight:700;display:flex;align-items:center;gap:6px}
+li .p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+li .t{font-size:.88rem;color:var(--muted)}
+#status{margin:0 0 12px;font-size:.92rem;color:var(--muted)}
+#status button{margin-left:8px}
+footer{margin-top:16px;font-size:.85rem;color:var(--muted)}
+footer a{color:var(--muted)}
+.pulse i,.ripple i{position:absolute;inset:0;border-radius:50%;border:2px solid var(--c)}
+.pulse i{animation:ring 2.6s ease-out infinite}
+.pulse i:nth-child(2){animation-delay:1.3s}
+.pulse b{position:absolute;inset:28%;border-radius:50%;border:1px solid #4a1a10}
+.ripple i{animation:ring 2.4s ease-out 1 forwards}
+.ripple i:nth-child(2){animation-delay:.5s}
+@keyframes ring{from{transform:scale(.3);opacity:1}to{transform:scale(2.8);opacity:0}}
+@media (prefers-reduced-motion:reduce){.pulse i{animation:none;opacity:.6}.ripple i{animation-duration:.01s}}
+.leaflet-popup-content{font:16px/1.4 "Times New Roman",Times,serif;margin:12px 14px}
+.pop-h{display:block;margin-bottom:2px}
+@media (max-width:760px){
+  #map{top:48%;left:0}
+  .panel{top:0;bottom:auto;width:100%;height:48%;border-right:0;border-bottom:1px solid var(--ink);padding:16px 18px}
+}
+</style>
+</head>
+<body>
+<div id="map" role="application" aria-label="World map of recent earthquakes"></div>
+
+<aside class="panel">
+  <h1>Tremor Map</h1>
+  <p class="sub">Recent earthquakes worldwide, from the U.S. Geological Survey. Select a point on the seismogram to move through time.</p>
+
+  <div class="group">
+    <span class="label">Window</span>
+    <div class="row" id="windows">
+      <button type="button" data-window="hour" aria-pressed="false">Hour</button>
+      <button type="button" data-window="day" aria-pressed="true">Day</button>
+      <button type="button" data-window="week" aria-pressed="false">Week</button>
+      <button type="button" data-window="month" aria-pressed="false">Month</button>
+    </div>
+  </div>
+
+  <div class="group">
+    <span class="label">Seismogram</span>
+    <canvas id="seis" tabindex="0" role="slider" aria-label="Time position. Use the arrow keys." aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"></canvas>
+    <div class="ends"><span id="seisStart"></span><span>now</span></div>
+    <div class="row" style="margin-top:8px">
+      <button type="button" id="play">Play replay</button>
+      <button type="button" id="live" aria-pressed="true">Live</button>
+      <select id="speed" aria-label="Replay speed"><option value="1">1x</option><option value="2">2x</option><option value="4">4x</option></select>
+      <button type="button" id="sound" aria-pressed="false">Sound</button>
+    </div>
+  </div>
+
+  <div class="group">
+    <label class="label" for="mag">Minimum magnitude: <strong id="magOut">0</strong></label>
+    <input id="mag" type="range" min="0" max="7" step="0.5" value="0">
+    <p class="note" id="feedNote"></p>
+  </div>
+
+  <div class="group">
+    <span class="label">Go to</span>
+    <div class="row" id="regions">
+      <button type="button" data-region="world">World</button>
+      <button type="button" data-region="asia">Asia-Pacific</button>
+      <button type="button" data-region="americas">Americas</button>
+    </div>
+  </div>
+
+  <p id="status" role="status">Loading earthquakes...</p>
+  <div class="stats" aria-live="polite">
+    <strong id="count">0</strong><span class="muted">quakes shown</span>
+    <strong id="top">-</strong><span class="muted" id="topPlace">strongest quake</span>
+  </div>
+
+  <div class="legend" id="legend"></div>
+  <span class="label">Latest quakes</span>
+  <ul id="latest"></ul>
+
+  <footer>Data: <a href="https://earthquake.usgs.gov/">USGS Earthquake Hazards Program</a>. Land outlines: Natural Earth. Select a quake to hear it when Sound is on.</footer>
+</aside>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="land.js"></script>
+<script src="quake-utils.js"></script>
+<script>
+(function () {
+  const U = QuakeUtils;
+  const BASE = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/";
+  const FEEDS = { hour: ["all_hour", "all"], day: ["2.5_day", "M2.5 and above"], week: ["2.5_week", "M2.5 and above"], month: ["4.5_month", "M4.5 and above"] };
+  const SPAN = { hour: 36e5, day: 864e5, week: 6048e5, month: 2592e6 };
+  const START = { hour: "1 hour ago", day: "24 hours ago", week: "7 days ago", month: "30 days ago" };
+  const REGIONS = { world: [[20, 10], 2], asia: [[8, 125], 3], americas: [[8, -85], 3] };
+  const REPLAY_MS = 24000;
+  const state = { window: "day", minMag: 0, quakes: [], updated: 0 };
+  let timeline = [], playhead = null, playing = false, cursor = 0, lastFrame = 0, lastUi = 0, ripples = 0;
+  let audio = null, soundOn = false;
+
+  const $ = (id) => document.getElementById(id);
+  const map = L.map("map", { preferCanvas: true, minZoom: 2, maxZoom: 7, worldCopyJump: true }).setView(REGIONS.world[0], REGIONS.world[1]);
+
+  // The map is drawn from bundled land outlines (land.js), so it needs no tile server.
+  map.attributionControl.setPrefix("Leaflet");
+  map.attributionControl.addAttribution("Land outlines: Natural Earth");
+  const base = L.layerGroup().addTo(map);
+  for (const shift of [-360, 0, 360]) {
+    for (const polygon of LAND) {
+      L.polygon(polygon.map((ring) => ring.map(([x, y]) => [y, x + shift])), {
+        interactive: false, color: "#8d99a3", weight: 0.7, fillColor: "#ffffff", fillOpacity: 1,
+      }).addTo(base);
+    }
+  }
+  // Grid lines every 30 degrees, like seismograph chart paper.
+  const grid = { interactive: false, color: "#b3bec7", weight: 1, opacity: 0.8 };
+  for (let lon = -540; lon <= 540; lon += 30) L.polyline([[-85, lon], [85, lon]], grid).addTo(base);
+  for (let lat = -60; lat <= 60; lat += 30) L.polyline([[lat, -540], [lat, 540]], grid).addTo(base);
+  const layer = L.layerGroup().addTo(map);
+
+  for (const [label, mag] of [["Under 3", 2], ["3", 3], ["4", 4], ["5", 5], ["6 and above", 6]]) {
+    const item = document.createElement("span"), dot = document.createElement("i");
+    dot.className = "dot"; dot.style.background = U.magnitudeColor(mag);
+    item.append(dot, label); $("legend").append(item);
+  }
+
+  // Sound: a tone for each quake. The audio context starts after a click, as browsers require.
+  function tone(q) {
+    if (!soundOn || !audio) return;
+    const t = U.quakeTone(q.mag), osc = audio.createOscillator(), gain = audio.createGain(), now = audio.currentTime;
+    osc.type = q.mag >= 5 ? "sine" : "triangle";
+    osc.frequency.value = t.freq;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(t.gain, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + t.duration);
+    osc.connect(gain).connect(audio.destination);
+    osc.start(now); osc.stop(now + t.duration + 0.05);
+    if (navigator.vibrate) navigator.vibrate(U.vibrationPattern(q.mag));
+  }
+
+  function popup(q) {
+    const box = document.createElement("div");
+    const add = (text, cls) => { const d = document.createElement("div"); d.textContent = text; if (cls) d.className = cls; box.append(d); };
+    add(`M${q.mag.toFixed(1)}  ${q.place}`, "pop-h"); box.firstChild.style.fontWeight = "700";
+    add(`${U.timeAgo(q.time)}. Depth ${Math.round(q.depth)} km (${U.depthClass(q.depth)}).`);
+    if (q.depth < 70) add("Shallow quakes shake the surface harder near the epicenter.");
+    if (q.felt) add(`Felt by ${q.felt.toLocaleString("en-US")} people (USGS Did You Feel It).`);
+    if (q.alert) add(`USGS impact alert: ${q.alert}.`);
+    if (q.tsunami) add("Large ocean event. Follow official tsunami warnings.");
+    const href = U.safeUrl(q.url);
+    if (href) { const a = document.createElement("a"); a.href = href; a.target = "_blank"; a.rel = "noopener"; a.textContent = "Details on USGS"; box.append(a); }
+    return box;
+  }
+
+  function addMarker(q, pulse) {
+    const color = U.magnitudeColor(q.mag), radius = U.magnitudeRadius(q.mag);
+    let marker;
+    if (pulse) {
+      const size = Math.round(radius * 2);
+      marker = L.marker([q.lat, q.lon], { icon: L.divIcon({ className: "pulse", iconSize: [size, size],
+        html: `<i style="--c:${color}"></i><i style="--c:${color}"></i><b style="background:${color}"></b>` }) });
+    } else {
+      marker = L.circleMarker([q.lat, q.lon], { radius, color: "#4a1a10", weight: 0.8, fillColor: color, fillOpacity: 0.75 });
+    }
+    marker.bindPopup(() => popup(q)).on("click", () => tone(q)).addTo(layer);
+  }
+
+  function ripple(q) {
+    if (ripples > 40) return;
+    ripples++;
+    const color = U.magnitudeColor(q.mag), size = Math.round(U.magnitudeRadius(q.mag) * 2.4);
+    const m = L.marker([q.lat, q.lon], { interactive: false, icon: L.divIcon({ className: "ripple", iconSize: [size, size],
+      html: `<i style="--c:${color}"></i><i style="--c:${color}"></i>` }) }).addTo(map);
+    setTimeout(() => { map.removeLayer(m); ripples--; }, 2600);
+  }
+
+  const range = () => SPAN[state.window];
+  const t1 = () => state.updated;
+  const t0 = () => state.updated - range();
+  const visible = () => (playhead === null ? timeline : timeline.filter((q) => q.time <= playhead));
+
+  function rebuild() {
+    timeline = U.filterQuakes(state.quakes, state.minMag).sort((a, b) => a.time - b.time);
+    redraw();
+  }
+
+  function redraw() {
+    layer.clearLayers();
+    const now = Date.now(), list = visible();
+    for (const q of [...list].sort((a, b) => a.mag - b.mag)) addMarker(q, playhead === null && now - q.time < 36e5);
+    cursor = list.length;
+    updatePanel(); drawSeis();
+  }
+
+  function updatePanel() {
+    const list = visible(), s = U.summarize(list);
+    $("count").textContent = s.count.toLocaleString("en-US");
+    $("top").textContent = s.strongest ? `M${s.strongest.mag.toFixed(1)}` : "-";
+    $("topPlace").textContent = s.strongest ? s.strongest.place : "strongest quake";
+    const ul = $("latest"); ul.textContent = "";
+    for (const q of [...list].sort((a, b) => b.time - a.time).slice(0, 8)) {
+      const li = document.createElement("li"), btn = document.createElement("button");
+      btn.type = "button";
+      const m = document.createElement("span"), dot = document.createElement("i"), p = document.createElement("span"), t = document.createElement("span");
+      m.className = "m"; dot.className = "dot"; dot.style.background = U.magnitudeColor(q.mag); m.append(dot, q.mag.toFixed(1));
+      p.className = "p"; p.textContent = q.place; t.className = "t"; t.textContent = U.timeAgo(q.time);
+      btn.append(m, p, t);
+      btn.addEventListener("click", () => { map.flyTo([q.lat, q.lon], 5); tone(q); });
+      li.append(btn); ul.append(li);
+    }
+    $("status").textContent = playhead === null
+      ? (state.updated ? `Live. Updated ${U.timeAgo(state.updated)}. Refreshes every 5 minutes.` : "")
+      : `Replay: ${new Date(playhead).toLocaleString()}`;
+    $("live").setAttribute("aria-pressed", String(playhead === null));
+    $("play").textContent = playing ? "Pause" : "Play replay";
+    $("seisStart").textContent = START[state.window];
+    const pct = playhead === null ? 100 : Math.round(((playhead - t0()) / range()) * 100);
+    $("seis").setAttribute("aria-valuenow", String(pct));
+  }
+
+  // The seismogram: one spike per quake, taller for bigger quakes.
+  function drawSeis() {
+    const c = $("seis"), dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = 64;
+    if (!w) return;
+    c.width = w * dpr; c.height = h * dpr;
+    const g = c.getContext("2d"); g.scale(dpr, dpr);
+    g.strokeStyle = "#9aa5ae"; g.beginPath(); g.moveTo(0, h / 2); g.lineTo(w, h / 2); g.stroke();
+    g.lineWidth = 1.5;
+    for (const q of timeline) {
+      const x = ((q.time - t0()) / range()) * w, half = Math.max(2, (q.mag / 7) * (h / 2 - 3));
+      g.globalAlpha = playhead !== null && q.time > playhead ? 0.25 : 1;
+      g.strokeStyle = U.magnitudeColor(q.mag);
+      g.beginPath(); g.moveTo(x, h / 2 - half); g.lineTo(x, h / 2 + half); g.stroke();
+    }
+    g.globalAlpha = 1;
+    if (playhead !== null) {
+      const x = ((playhead - t0()) / range()) * w;
+      g.strokeStyle = "#111"; g.lineWidth = 2; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke();
+    }
+  }
+
+  function frame(now) {
+    if (!playing) return;
+    playhead = Math.min(t1(), playhead + (now - lastFrame) * (range() / REPLAY_MS) * Number($("speed").value));
+    lastFrame = now;
+    while (cursor < timeline.length && timeline[cursor].time <= playhead) {
+      const q = timeline[cursor++];
+      addMarker(q, false); ripple(q); tone(q);
+    }
+    if (now - lastUi > 200) { updatePanel(); lastUi = now; }
+    drawSeis();
+    if (playhead >= t1()) { playing = false; playhead = null; redraw(); return; }
+    requestAnimationFrame(frame);
+  }
+
+  function setPlayhead(time) { playing = false; playhead = Math.max(t0(), Math.min(t1(), time)); redraw(); }
+
+  $("play").addEventListener("click", () => {
+    if (playing) { playing = false; updatePanel(); return; }
+    if (playhead === null || playhead >= t1()) { playhead = t0(); redraw(); }
+    playing = true; lastFrame = performance.now(); requestAnimationFrame(frame); updatePanel();
+  });
+  $("live").addEventListener("click", () => { playing = false; playhead = null; redraw(); });
+  $("sound").addEventListener("click", (e) => {
+    if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+    audio.resume();
+    soundOn = !soundOn;
+    e.currentTarget.setAttribute("aria-pressed", String(soundOn));
+    if (soundOn) tone({ mag: 4 });
+  });
+
+  const seis = $("seis");
+  const scrub = (e) => { const r = seis.getBoundingClientRect(); setPlayhead(t0() + ((e.clientX - r.left) / r.width) * range()); };
+  seis.addEventListener("pointerdown", (e) => { seis.setPointerCapture(e.pointerId); seis.dataset.drag = "1"; scrub(e); });
+  seis.addEventListener("pointermove", (e) => { if (seis.dataset.drag) scrub(e); });
+  seis.addEventListener("pointerup", () => { delete seis.dataset.drag; });
+  seis.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const step = range() / 50 * (e.key === "ArrowLeft" ? -1 : 1);
+    setPlayhead((playhead === null ? t1() : playhead) + step);
+  });
+  window.addEventListener("resize", drawSeis);
+
+  async function load() {
+    $("status").textContent = "Loading earthquakes...";
+    $("feedNote").textContent = `This feed lists ${FEEDS[state.window][1]}.`;
+    try {
+      const response = await fetch(BASE + FEEDS[state.window][0] + ".geojson");
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      state.quakes = U.parseFeed(await response.json());
+      state.updated = Date.now(); playhead = null; playing = false;
+      rebuild();
+    } catch (error) {
+      const status = $("status"), retry = document.createElement("button");
+      status.textContent = "Could not load data from the USGS. Check your connection.";
+      retry.type = "button"; retry.textContent = "Try again"; retry.addEventListener("click", load);
+      status.append(retry);
+    }
+  }
+
+  $("windows").addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    state.window = btn.dataset.window;
+    for (const b of $("windows").children) b.setAttribute("aria-pressed", String(b === btn));
+    load();
+  });
+  $("regions").addEventListener("click", (e) => { const btn = e.target.closest("button"); if (btn) map.flyTo(...REGIONS[btn.dataset.region]); });
+  $("mag").addEventListener("input", (e) => { state.minMag = Number(e.target.value); $("magOut").textContent = state.minMag; rebuild(); });
+
+  load();
+  setInterval(() => { if (!playing && playhead === null) load(); }, 5 * 60 * 1000);
+})();
+</script>
+</body>
+</html>
